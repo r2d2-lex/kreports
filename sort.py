@@ -1,13 +1,8 @@
 #!/usr/bin/env python3
-import random
-import re
-import collections
 import requests
 from html.parser import HTMLParser
 import openpyxl
 from datetime import datetime
-import time
-import locale
 import os
 import settings
 
@@ -15,7 +10,7 @@ import settings
 USERNAME_ALL_USERS = 'All'
 REPORT_FILENAME = 'example.xlsx'
 WEBTIMEOUT = 60  # время в минутах счётчика посещений
-COUNT, SIZEB, UXTIME, VISITS = (0, 1, 2, 3)
+COUNT, SIZEB, TIME_STUMP, VISITS = (0, 1, 2, 3)
 IP, USER, DATE, LINK, BYTES = (0, 2, 3, 6, 9)
 
 
@@ -41,16 +36,49 @@ def main():
         print("Неверное имя пользователя")
         exit()
 
-    generate_report(REPORT_FILENAME, rows, username)
+    statistics_dict, min_date, max_date = make_statistics(rows, username)
+    generate_xls_report(REPORT_FILENAME, statistics_dict, min_date, max_date)
     return
 
 
-def generate_report(report_filename, rows, username):
+def generate_xls_report(report_filename, statistics_dict, min_date, max_date):
+    """
+        Генерирует xlsx отчёт потребления трафика для пользователя.
+    """
+    wb = openpyxl.Workbook()
+    for user in sorted(statistics_dict.keys(), reverse=True):
+        if user in settings.EXCLUDE:
+            continue
+        data = statistics_dict[user]
+        print("___ User: ", user, " Items:,", len(data), "______________________________")
+        sheet = xls_head(wb, user, min_date, max_date)
+        len_link, len_size = 0, 0
+        xls_row = 3  # Стартовая строка для записи логов
+
+        for lnk, opts in sorted(data.items(), reverse=True, key=lambda x: x[1][1]):
+            print("Link: {0}  Options: {1}  Traff:{2}".format(lnk, opts, traf(opts[SIZEB])))
+            if opts[SIZEB] == 0:
+                continue
+            if len(lnk) > len_link:
+                len_link = len(lnk)
+            if len(traf(opts[SIZEB])) > len_size:
+                len_size = len(traf(opts[SIZEB]))
+            xlsInsert(sheet, xls_row, 2, lnk, traf(opts[SIZEB]), opts[COUNT], opts[VISITS])
+            xls_row += 1
+        xlsSetColumn(sheet, len_link, len_size, 10, 10)
+    print("MinDate", datetime.fromtimestamp(min_date), " MaxDate: ", datetime.fromtimestamp(max_date))
+    wb.save(report_filename)
+
+
+def make_statistics(rows, username):
+    """
+        Создаёт словарь со статистикий по ссылкам, ключами которого являются имена пользователей, значением является
+        словарь ключами которого являются доменные имена сайтов.
+    """
     row = 0  # счётчик строк лога
-    lst = {}  # словарь пользователя
+    statistic_dict = {}  # словарь пользователя
     min_date = 999999999999999
     max_date = 0
-
     while row < len(rows):
         try:
             user = rows[row][USER]
@@ -66,43 +94,54 @@ def generate_report(report_filename, rows, username):
                 if user != username:
                     continue
 
-            db_record = lst.get(user)
+            db_record = statistic_dict.get(user)
             if db_record:
-                db_record = lst.pop(user)
-                lst[user] = CheckLinkExists(db_record, link, byte, time_stump)
+                statistic_dict[user] = check_link_exists(db_record, link, byte, time_stump)
             else:
-                # First user record - Count,Size,UnixTime,Visits
+                # Make new user record - Count,Size,UnixTime,Visits
                 links = {
                     link: [1, byte, time_stump, 1],
                 }
-                lst[user] = links
+                statistic_dict[user] = links
         except EOFError:
             break
-
-    wb = openpyxl.Workbook()
-
-    for user in sorted(lst.keys(), reverse=True):
-        if user in settings.EXCLUDE:
+        except ValueError as err:
+            print(err)
+            input('Press any key')
             continue
-        data = lst[user]
-        print("___ User: ", user, " Items:,", len(data), "______________________________")
-        sheet = xlsHead(wb, user, min_date, max_date)
-        lenlink, lensize = 0, 0
-        xrow = 3  # Стартовая строка для записи логов
 
-        for lnk, opts in sorted(data.items(), reverse=True, key=lambda x: x[1][1]):
-            print("Link: {0}  Options: {1}  Traff:{2}".format(lnk, opts, traf(opts[SIZEB])))
-            if opts[SIZEB] == 0:
-                continue
-            if len(lnk) > lenlink:
-                lenlink = len(lnk)
-            if len(traf(opts[SIZEB])) > lensize:
-                lensize = len(traf(opts[SIZEB]))
-            xlsInsert(sheet, xrow, 2, lnk, traf(opts[SIZEB]), opts[COUNT], opts[VISITS])
-            xrow += 1
-        xlsSetColumn(sheet, lenlink, lensize, 10, 10)
-    print("MinDate", datetime.fromtimestamp(min_date), " MaxDate: ", datetime.fromtimestamp(max_date))
-    wb.save(report_filename)
+    return statistic_dict, min_date, max_date
+
+
+def check_link_exists(db_record, link, byte, time_stump):
+    """
+        Функция ищет в словаре имя ссылки. Если находит, то добавляет - кол-во запросов, кол-во байт,
+        кол-во посещений. Возвращает словарь с новыми значениями.
+    """
+    for db_link, options in db_record.items():
+        if db_link == link:
+            try:
+                # Count links
+                count = int(options[COUNT])
+                count += 1
+                # Size of link
+                sizeb = int(options[SIZEB])
+                sizeb += byte
+                # Visits
+                visits = int(options[VISITS])
+                # TIME_STUMP
+                db_timestump = int(options[TIME_STUMP])
+                if time_stump - db_timestump > 60 * WEBTIMEOUT:
+                    db_timestump = time_stump
+                    visits += 1
+                db_record[link] = [count, sizeb, db_timestump, visits]
+            except ValueError as err:
+                print(err)
+                exit()
+            return db_record
+    else:
+        db_record[link] = [1, byte, time_stump, 1]
+    return db_record
 
 
 def choose_log():
@@ -157,7 +196,7 @@ def xlsInsert(sheet, xrow, xcol, link, traf, req, visits):
     return
 
 
-def xlsHead(wb, listname, mindate, maxdate):
+def xls_head(wb, listname, mindate, maxdate):
     wb.create_sheet(listname, index=0)
     sheet = wb[listname]
     xrow = 3
@@ -190,7 +229,6 @@ def xlsSetColumn(sheet, first, second, third, four):
 
 
 def time_to_timestump(date_time):
-    date_time = date_time[1::]
     return int(datetime.strptime(date_time, '%d/%b/%Y:%H:%M:%S').strftime("%s"))
 
 
@@ -202,29 +240,6 @@ def traf(byte=0):
         byte = byte / 1024
         return (str(round(byte, 1)) + ' Kbytes')
     return (str(byte) + ' Bytes')
-
-
-def CheckLinkExists(dbres, link, byte, uxtime):
-    for dblink, options in dbres.items():
-        if dblink == link:
-            # Count links
-            count = options[COUNT]
-            count += 1
-            # Size of link
-            sizeb = options[SIZEB]
-            sizeb += byte
-            # Visits
-            visits = int(options[VISITS])
-            # UxTime
-            dbuxtime = int(options[UXTIME])
-            if (uxtime - dbuxtime > 60 * WEBTIMEOUT):
-                dbuxtime = uxtime
-                visits += 1
-            dbres[link] = [count, sizeb, dbuxtime, visits]
-            return (dbres)
-    else:
-        dbres[link] = [1, byte, uxtime, 1]
-    return (dbres)
 
 
 def split_strings(rows):
