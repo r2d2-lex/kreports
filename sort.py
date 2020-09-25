@@ -12,6 +12,13 @@ REPORT_FILENAME = 'example.xlsx'
 WEBTIMEOUT = 60  # время в минутах счётчика посещений
 COUNT, SIZEB, TIME_STUMP, VISITS = (0, 1, 2, 3)
 IP, USER, DATE, LINK, BYTES = (0, 2, 3, 6, 9)
+COLUMN_WIDTH_REQUESTS = 10
+COLUMN_WIDTH_VISITS = 10
+# Стартовая колонка для записи данных
+START_RECORD_COLUMN = 2
+START_RECORD_COLUMN_LETTER = 'B'
+# Стартовая строка для записи данных
+START_RECORD_ROW = 3
 
 
 def main():
@@ -43,31 +50,43 @@ def main():
 
 def generate_xls_report(report_filename, statistics_dict, min_date, max_date):
     """
-        Генерирует xlsx отчёт потребления трафика для пользователя.
+        Генерирует xlsx отчёт потребления интернет траффика для пользователя.
     """
-    wb = openpyxl.Workbook()
+    xlsx_workbook = openpyxl.Workbook()
     for user in sorted(statistics_dict.keys(), reverse=True):
         if user in settings.EXCLUDE:
             continue
         data = statistics_dict[user]
-        print("___ User: ", user, " Items:,", len(data), "______________________________")
-        sheet = xls_head(wb, user, min_date, max_date)
-        len_link, len_size = 0, 0
-        xls_row = 3  # Стартовая строка для записи логов
+        sheet = xls_head(xlsx_workbook, user, min_date, max_date)
 
-        for lnk, opts in sorted(data.items(), reverse=True, key=lambda x: x[1][1]):
-            print("Link: {0}  Options: {1}  Traff:{2}".format(lnk, opts, traf(opts[SIZEB])))
+        column_domain_length = 0
+        column_traffic_size = 0
+        xls_row = START_RECORD_ROW
+
+        for domain_name, opts in sorted(data.items(), reverse=True, key=lambda x: x[1][1]):
+
             if opts[SIZEB] == 0:
                 continue
-            if len(lnk) > len_link:
-                len_link = len(lnk)
-            if len(traf(opts[SIZEB])) > len_size:
-                len_size = len(traf(opts[SIZEB]))
-            xlsInsert(sheet, xls_row, 2, lnk, traf(opts[SIZEB]), opts[COUNT], opts[VISITS])
+            if len(domain_name) > column_domain_length:
+                column_domain_length = len(domain_name)
+
+            size_of_data = get_network_traffic_size(opts[SIZEB])
+            if len(size_of_data) > column_traffic_size:
+                column_traffic_size = len(size_of_data)
+
+            xls_insert(sheet, xls_row, START_RECORD_COLUMN, domain_name, size_of_data, opts[COUNT], opts[VISITS])
             xls_row += 1
-        xlsSetColumn(sheet, len_link, len_size, 10, 10)
-    print("MinDate", datetime.fromtimestamp(min_date), " MaxDate: ", datetime.fromtimestamp(max_date))
-    wb.save(report_filename)
+
+        xls_set_column_size(
+            sheet,
+            START_RECORD_COLUMN_LETTER,
+            column_domain_length,
+            column_traffic_size,
+            COLUMN_WIDTH_REQUESTS,
+            COLUMN_WIDTH_VISITS,
+        )
+    print("Отчёт от:", datetime.fromtimestamp(min_date), "до:", datetime.fromtimestamp(max_date))
+    xlsx_workbook.save(report_filename)
 
 
 def make_statistics(rows, username):
@@ -175,31 +194,24 @@ def choose_log():
             continue
 
 
-def xlsInsert(sheet, xrow, xcol, link, traf, req, visits):
+def xls_insert(sheet, xls_row, xls_start_col, *records):
     """
-    sheet - xls sheet,(xrow,xcol) - row + column, link - link of resource, traf - traffic from link,
-    req - numbers os requests from browser, vivists - visits in hour
+        sheet - страница, (xls_row, xls_start_col) - строка + стартовая колонка,
+        Далее  *records содержит:
+        имя ресурса, трафик с домена, кол-во запросов на ресурс, кол-во посещений за WEBTIMEOUT
     """
-    cell = sheet.cell(row=xrow, column=xcol)
-    cell.value = link
-    xcol += 1
-    cell = sheet.cell(row=xrow, column=xcol)
-    cell.value = traf
-    xcol += 1
-    cell = sheet.cell(row=xrow, column=xcol)
-    cell.value = req
-    xcol += 1
-    cell = sheet.cell(row=xrow, column=xcol)
-    cell.value = visits
-    # if lnk.startswith("http:"):
-    #    print(GetTitle(lnk))
+    xls_col = xls_start_col
+    for record in records:
+        cell = sheet.cell(row=xls_row, column=xls_col)
+        cell.value = record
+        xls_col += 1
     return
 
 
-def xls_head(wb, listname, mindate, maxdate):
-    wb.create_sheet(listname, index=0)
-    sheet = wb[listname]
-    xrow = 3
+def xls_head(xlsx_workbook, sheet_name, min_date, max_date):
+    xlsx_workbook.create_sheet(sheet_name, index=0)
+    sheet = xlsx_workbook[sheet_name]
+
     sheet.merge_cells("B1:E1")
     # font = openpyxl.styles.Font(name='Arial', size=24, italic=True, color='FF0000')
     font = openpyxl.styles.Font(bold=True)
@@ -208,7 +220,7 @@ def xls_head(wb, listname, mindate, maxdate):
     sheet['D2'].font = font
     sheet['E2'].font = font
     cell = sheet.cell(row=1, column=2)
-    cell.value = "Date: " + str(datetime.fromtimestamp(mindate)) + " - " + str(datetime.fromtimestamp(maxdate))
+    cell.value = "Date: " + str(datetime.fromtimestamp(min_date)) + " - " + str(datetime.fromtimestamp(max_date))
     cell = sheet.cell(row=2, column=2)
     cell.value = "Link"
     cell = sheet.cell(row=2, column=3)
@@ -220,11 +232,20 @@ def xls_head(wb, listname, mindate, maxdate):
     return sheet
 
 
-def xlsSetColumn(sheet, first, second, third, four):
-    sheet.column_dimensions['B'].width = first
-    sheet.column_dimensions['C'].width = second
-    sheet.column_dimensions['D'].width = third
-    sheet.column_dimensions['E'].width = four
+def xls_set_column_size(sheet, start_column_letter, *columns):
+    """
+        Устанавливает размеры колонок на странице. Колонки должны быть в диапозоне от 'A' до 'Z'
+    """
+    column_letter = start_column_letter
+    good_letters = [letter for letter in range(ord('A'), ord('Z'))]
+
+    for column_size in columns:
+        if ord(column_letter) not in good_letters:
+            break
+        sheet.column_dimensions[column_letter].width = column_size
+        column_index = ord(column_letter)
+        column_index += 1
+        column_letter = chr(column_index)
     return
 
 
@@ -232,14 +253,14 @@ def time_to_timestump(date_time):
     return int(datetime.strptime(date_time, '%d/%b/%Y:%H:%M:%S').strftime("%s"))
 
 
-def traf(byte=0):
+def get_network_traffic_size(byte=0):
     if byte > 1024 * 1024:
         byte = byte / 1024 / 1024
-        return (str(round(byte, 1)) + ' Mbytes')
+        return str(round(byte, 1)) + ' Mbytes'
     if byte > 1024:
         byte = byte / 1024
-        return (str(round(byte, 1)) + ' Kbytes')
-    return (str(byte) + ' Bytes')
+        return str(round(byte, 1)) + ' Kbytes'
+    return str(byte) + ' Bytes'
 
 
 def split_strings(rows):
