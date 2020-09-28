@@ -1,14 +1,10 @@
 #!/usr/bin/env python3
-import requests
-from html.parser import HTMLParser
 import openpyxl
 from datetime import datetime
 import os
-import settings
+from settings import *
 
 # 192.168.0.248', '-', 'servers', '[25/Mar/2019:01:18:25', '+0500]', '"CONNECT', 'https://195.122.177.135:443/', 'HTTP/1.0"', '200', '856
-USERNAME_ALL_USERS = 'All'
-REPORT_FILENAME = 'example.xlsx'
 WEBTIMEOUT = 60  # время в минутах счётчика посещений
 COUNT, SIZEB, TIME_STUMP, VISITS = (0, 1, 2, 3)
 IP, USER, DATE, LINK, BYTES = (0, 2, 3, 6, 9)
@@ -22,8 +18,6 @@ START_RECORD_ROW = 3
 
 
 def main():
-    requests.packages.urllib3.disable_warnings()
-
     filename = choose_log()
     with open(filename, 'r') as fs:
         rows = fs.read().splitlines()
@@ -54,7 +48,7 @@ def generate_xls_report(report_filename, statistics_dict, min_date, max_date):
     """
     xlsx_workbook = openpyxl.Workbook()
     for user in sorted(statistics_dict.keys(), reverse=True):
-        if user in settings.EXCLUDE:
+        if user in EXCLUDE:
             continue
         data = statistics_dict[user]
         sheet = xls_head(xlsx_workbook, user, min_date, max_date)
@@ -301,51 +295,6 @@ def parse_domain_name(link):
     if link.endswith(":443"):
         link = link.split(":443")[0]
     return link
-
-
-class MyHTMLParser(HTMLParser):
-    def handle_endtag(self, tag):
-        if tag == 'title':
-            raise StopIteration()
-
-    def handle_data(self, data):
-        self.title = data
-
-
-def GetTitle(url):
-    http_proxy = "http://192.168.1.1:8080"
-    https_proxy = "https://192.168.1.1:8080"
-    ftp_proxy = "ftp://192.168.1.1:8080"
-    proxyDict = {
-        "http": http_proxy,
-        "https": https_proxy,
-        "ftp": ftp_proxy
-    }
-    try:
-        r = requests.get(url, stream=True, proxies=proxyDict, verify=False, timeout=1)  # включаем потоковый режим
-        data = next(r.iter_content(
-            2048))  # запрашиваем ровно 512 байт, для чтения тега head этого должно хватать, или можно еще увеличить
-        # print("!!!!",data,"!!!!")
-        parser = MyHTMLParser()
-        if r.encoding is None:
-            r.close()
-            return None
-        sdata = data.decode(r.encoding)
-        r.close()
-    except requests.exceptions.SSLError:
-        return None
-    except StopIteration:
-        return None
-    except Exception:
-        return None
-
-    try:
-        parser.feed(sdata)
-    except StopIteration:
-        print(parser.title)
-    except Exception:
-        return None
-    return
 
 
 main()
